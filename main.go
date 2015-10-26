@@ -10,16 +10,27 @@ import (
 	"strings"
 )
 
-func validateFile(c chan<- string, schema *gojsonschema.Schema, path string) {
+type Context struct {
+	schema  *gojsonschema.Schema
+	result  chan<- string
+	running chan<- bool
+}
+
+func validateFile(ctx Context, path string) {
+	ctx.running <- true
+	defer func() {
+		ctx.running <- false
+	}()
+
 	//fmt.Println(path)
 	bytes, err := ioutil.ReadFile(path)
 	if err != nil {
-		c <- fmt.Sprint(err)
+		ctx.result <- fmt.Sprint(err)
 		return
 	}
-	result, err := schema.Validate(gojsonschema.NewStringLoader(string(bytes)))
+	result, err := ctx.schema.Validate(gojsonschema.NewStringLoader(string(bytes)))
 	if err != nil {
-		c <- fmt.Sprint(path, err)
+		ctx.result <- fmt.Sprint(path, err)
 		return
 	}
 
@@ -27,21 +38,25 @@ func validateFile(c chan<- string, schema *gojsonschema.Schema, path string) {
 		errors := result.Errors()
 		res := make([]string, 1+len(errors))
 		res[0] = fmt.Sprintf("%s:", path)
-		//c <- fmt.Sprintf("%s:\n", path)
+		//ctx.result <- fmt.Sprintf("%s:\n", path)
 		for i, desc := range errors {
 			res[1+i] = fmt.Sprint(desc)
-			//c <- fmt.Sprintln("- ", desc)
 		}
-		c <- strings.Join(res, "\n- ") + "\n"
+		ctx.result <- strings.Join(res, "\n- ") + "\n"
 	} else {
-		//c <- fmt.Sprintf("%s: ok\n", path)
+		//ctx.result <- = fmt.Sprintf("%s: ok\n", path)
 	}
 }
 
-func validateDir(c chan<- string, schema *gojsonschema.Schema, dir string) {
+func validateDir(ctx Context, dir string) {
+	ctx.running <- true
+	defer func() {
+		ctx.running <- false
+	}()
+
 	file, err := os.Open(dir)
 	if err != nil {
-		c <- fmt.Sprintln(err)
+		ctx.result <- fmt.Sprintln(err)
 		return
 	}
 	defer file.Close()
@@ -53,27 +68,26 @@ func validateDir(c chan<- string, schema *gojsonschema.Schema, dir string) {
 				path := dir + "/" + any.Name()
 				if any.IsDir() {
 					// Recurse
-					go validateDir(c, schema, path)
+					go validateDir(ctx, path)
 				} else {
-					go validateFile(c, schema, path)
+					go validateFile(ctx, path)
 				}
 			}
 		} else {
 			if errDir != io.EOF {
-				c <- fmt.Sprintln(err)
+				ctx.result <- fmt.Sprintln(err)
 			}
 			break
 		}
 	}
 }
 
-func validateAny(c chan<- string, schema *gojsonschema.Schema, path string) {
+func validateAny(ctx Context, path string) {
 	if fileinfo, err := os.Stat(path); err == nil {
 		if fileinfo.IsDir() {
-			go validateDir(c, schema, path)
+			go validateDir(ctx, path)
 		} else {
-			//fmt.Println(path)
-			go validateFile(c, schema, path)
+			go validateFile(ctx, path)
 		}
 	} else {
 		panic(err)
@@ -81,17 +95,43 @@ func validateAny(c chan<- string, schema *gojsonschema.Schema, path string) {
 }
 
 func main() {
-	c := make(chan string)
+	result := make(chan string)
+	running := make(chan bool)
+	ctx := Context{
+		result:  result,
+		running: running,
+	}
+
 	schemaFile, err := filepath.Abs(os.Args[1])
-	schema, err := gojsonschema.NewSchema(gojsonschema.NewReferenceLoader("file://" + schemaFile))
+	ctx.schema, err = gojsonschema.NewSchema(gojsonschema.NewReferenceLoader("file://" + schemaFile))
 	if err != nil {
 		panic(err)
 	}
 
-	for _, arg := range os.Args[2:] {
-		validateAny(c, schema, arg)
+	if len(os.Args) == 2 {
+		fmt.Println("missing files/dir to process")
+		return
 	}
+
+	for _, arg := range os.Args[2:] {
+		validateAny(ctx, arg)
+	}
+	count := 0
 	for {
-		fmt.Print(<-c)
+		select {
+		case r := <-running:
+			if r {
+				count++
+			} else {
+				count--
+				if count == 0 {
+					//fmt.Println("Done.")
+					return
+				}
+			}
+			//fmt.Println("Running: ", count)
+		case r := <-result:
+			fmt.Print(r)
+		}
 	}
 }
