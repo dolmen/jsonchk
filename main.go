@@ -5,6 +5,7 @@ import (
 	"github.com/xeipuuv/gojsonschema"
 	"io"
 	"io/ioutil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,7 +104,11 @@ func main() {
 	}
 
 	schemaFile, err := filepath.Abs(os.Args[1])
-	ctx.schema, err = gojsonschema.NewSchema(gojsonschema.NewReferenceLoader("file://" + schemaFile))
+	u := url.URL{
+		Scheme: "file",
+		Path:   schemaFile,
+	}
+	ctx.schema, err = gojsonschema.NewSchema(gojsonschema.NewReferenceLoader(u.String()))
 	if err != nil {
 		panic(err)
 	}
