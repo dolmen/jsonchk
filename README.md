@@ -1,6 +1,6 @@
 # About
 
-A JSON Schema validation tool designed to validate multiple documents in parallel.
+A [JSON Schema](http://json-schema.org/) validation tool designed to validate multiple documents in parallel.
 
 # Build, install
 
